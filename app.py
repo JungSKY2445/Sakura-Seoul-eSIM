@@ -29,6 +29,7 @@ from linebot.v3.webhooks import (
 import config
 import database as db
 import messages as msg
+import amazon_api
 
 # Flask app
 app = Flask(__name__)
@@ -248,6 +249,16 @@ def reply_messages(event, messages):
                 messages=messages,
             )
         )
+
+
+# ========== Admin: Order Sync ==========
+
+@app.route("/admin/sync-orders", methods=["GET"])
+def sync_orders():
+    """Amazon 주문 수동 동기화"""
+    hours = request.args.get("hours", 24, type=int)
+    result = amazon_api.sync_orders(hours_back=hours)
+    return jsonify(result)
 
 
 # ========== Admin: Rich Menu Setup ==========
