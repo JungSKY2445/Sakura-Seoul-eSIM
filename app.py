@@ -320,7 +320,7 @@ def _build_main_image(fonts):
 
 def _build_keyboard_image(fonts):
     """키보드 모드 리치 메뉴 이미지 (메뉴로 돌아가기 바)"""
-    W, H = 2500, 243
+    W, H = 2500, 843
     img = Image.new("RGB", (W, H), "#37474F")
     draw = ImageDraw.Draw(img)
     draw.text((W // 2, H // 2), "▼ メニューを表示", fill="#FFFFFF",
@@ -411,14 +411,13 @@ def setup_rich_menu():
         return jsonify({"error": "Menu A image failed", "detail": r.text}), 500
 
     # ── Step 2: 키보드 메뉴 (Menu B) 생성 ──
-    KB_H = 243
     menu_b_data = {
-        "size": {"width": W, "height": KB_H},
+        "size": {"width": W, "height": H},
         "selected": False,
         "name": "キーボードモード",
         "chatBarText": "メニューを表示",
         "areas": [
-            {"bounds": {"x": 0, "y": 0, "width": W, "height": KB_H},
+            {"bounds": {"x": 0, "y": 0, "width": W, "height": H},
              "action": {"type": "richmenuswitch",
                         "richMenuAliasId": "richmenu-main",
                         "data": "switch-to-main"}},
