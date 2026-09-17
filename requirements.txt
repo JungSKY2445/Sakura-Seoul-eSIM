@@ -1,5 +1,5 @@
 flask==3.1.0
-line-bot-sdk==3.14.0
+line-bot-sdk==3.15.0
 gunicorn==23.0.0
 openpyxl==3.1.5
 Pillow==11.1.0
