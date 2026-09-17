@@ -6,7 +6,7 @@ LINE 봇 메시지 텍스트 정의 (일본어)
 ACTION_QR_ISSUE = "QRコード発行"
 ACTION_HOW_TO_USE = "使い方ガイド"
 ACTION_CHECK_ORDER = "注文確認"
-ACTION_CONTACT = "お問い合わせ"
+ACTION_CONTACT = "お問い合わせ"  # 레거시 (리치 메뉴에서 삭제됨)
 
 # 인사 메시지
 WELCOME_MESSAGE = """こんにちは！🛫
@@ -17,7 +17,7 @@ eSIM Japan へようこそ！
 📱 QRコード発行 → eSIMのQRコードを受け取る
 📖 使い方ガイド → eSIMの設定方法
 🔍 注文確認 → 注文状況の確認
-💬 お問い合わせ → サポートへ連絡"""
+⌨️ チャット入力 → キーボードで質問する"""
 
 # QR 발행 플로우
 ASK_ORDER_NUMBER = """📱 QRコード発行
@@ -75,7 +75,7 @@ HOW_TO_USE_GUIDE = """📖 eSIM 設定ガイド
 ⚠️ ご注意
 ・日本到着後にeSIMを有効化してください
 ・端末がeSIM対応であることをご確認ください
-・不明な点は「お問い合わせ」からご連絡ください"""
+・不明な点はチャットでお気軽にお問い合わせください"""
 
 # 주문 확인
 ASK_ORDER_NUMBER_CHECK = """🔍 注文確認
