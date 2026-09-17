@@ -49,11 +49,18 @@ def callback():
     body = request.get_data(as_text=True)
     app.logger.info(f"Request body: {body}")
 
+    # LINE Verify 요청 (빈 events) 대응
+    if not body or body == "{}":
+        return "OK"
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         app.logger.error("Invalid signature")
         abort(400)
+    except Exception as e:
+        app.logger.error(f"Error: {e}")
+        return "OK"
 
     return "OK"
 
