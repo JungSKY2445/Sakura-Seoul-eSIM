@@ -252,48 +252,8 @@ def reply_messages(event, messages):
 
 # ========== Admin: Rich Menu Setup ==========
 
-@app.route("/admin/setup-richmenu", methods=["GET"])
-def setup_rich_menu():
-    """リッチメニューをワンクリックで作成・登録"""
-    token = config.LINE_CHANNEL_ACCESS_TOKEN
-    if not token:
-        return jsonify({"error": "LINE_CHANNEL_ACCESS_TOKEN not set"}), 500
-
-    # ── Step 0: 기존 리치 메뉴 전부 삭제 ──
-    auth_h = {"Authorization": f"Bearer {token}"}
-    try:
-        old_menus = http_requests.get(
-            "https://api.line.me/v2/bot/richmenu/list", headers=auth_h
-        ).json().get("richmenus", [])
-        for m in old_menus:
-            http_requests.delete(
-                f"https://api.line.me/v2/bot/richmenu/{m['richMenuId']}",
-                headers=auth_h,
-            )
-    except Exception:
-        pass  # 기존 메뉴 없으면 무시
-
-    # ── Step 1: 리치 메뉴 이미지 생성 (메모리) ──
-    MENU_W, MENU_H = 2500, 843
-    COLS, ROWS = 2, 2
-    CELL_W, CELL_H = MENU_W // COLS, MENU_H // ROWS
-
-    buttons = [
-        {"label": "QRコード発行", "action": "QRコード発行",
-         "bg": "#2196F3", "desc": "eSIMを受け取る", "icon": "QR"},
-        {"label": "使い方ガイド", "action": "使い方ガイド",
-         "bg": "#4CAF50", "desc": "設定方法を確認", "icon": "?"},
-        {"label": "注文確認", "action": "注文確認",
-         "bg": "#FF9800", "desc": "注文状況をチェック", "icon": "!!"},
-        {"label": "お問い合わせ", "action": "お問い合わせ",
-         "bg": "#9C27B0", "desc": "サポートへ連絡", "icon": "@"},
-    ]
-
-    img = Image.new("RGB", (MENU_W, MENU_H), "#FFFFFF")
-    draw = ImageDraw.Draw(img)
-
-    # 폰트 로드
-    font_large = font_small = font_icon = None
+def _load_fonts():
+    """CJK 폰트 로드"""
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -301,96 +261,204 @@ def setup_rich_menu():
     ]
     for fp in font_paths:
         try:
-            font_large = ImageFont.truetype(fp, 60)
-            font_small = ImageFont.truetype(fp, 36)
-            font_icon = ImageFont.truetype(fp, 40)
-            break
+            return {
+                "large": ImageFont.truetype(fp, 60),
+                "small": ImageFont.truetype(fp, 36),
+                "icon": ImageFont.truetype(fp, 40),
+                "bar": ImageFont.truetype(fp, 48),
+            }
         except Exception:
             continue
+    df = ImageFont.load_default()
+    return {"large": df, "small": df, "icon": df, "bar": df}
 
-    if not font_large:
-        font_large = font_small = font_icon = ImageFont.load_default()
 
-    def hex_rgb(h):
-        h = h.lstrip("#")
-        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+def _hex_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+
+def _build_main_image(fonts):
+    """메인 리치 메뉴 이미지 (2x2: 3기능 + チャット入力)"""
+    W, H = 2500, 843
+    CW, CH = W // 2, H // 2
+    buttons = [
+        {"label": "QRコード発行", "bg": "#2196F3", "desc": "eSIMを受け取る", "icon": "QR"},
+        {"label": "使い方ガイド", "bg": "#4CAF50", "desc": "設定方法を確認", "icon": "?"},
+        {"label": "注文確認",     "bg": "#FF9800", "desc": "注文状況をチェック", "icon": "!!"},
+        {"label": "チャット入力", "bg": "#607D8B", "desc": "キーボードで入力", "icon": "Aa"},
+    ]
+    img = Image.new("RGB", (W, H), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
 
     for i, btn in enumerate(buttons):
-        col, row = i % COLS, i // COLS
-        x0, y0 = col * CELL_W, row * CELL_H
-        x1, y1 = x0 + CELL_W, y0 + CELL_H
-        cx = x0 + CELL_W // 2
+        col, row = i % 2, i // 2
+        x0, y0 = col * CW, row * CH
+        x1, y1 = x0 + CW, y0 + CH
+        cx = x0 + CW // 2
 
-        draw.rectangle([x0, y0, x1, y1], fill=hex_rgb(btn["bg"]))
+        draw.rectangle([x0, y0, x1, y1], fill=_hex_rgb(btn["bg"]))
         draw.rectangle([x0, y0, x1, y1], outline="#FFFFFF", width=3)
 
-        icon_cy = y0 + CELL_H // 2 - 60
+        icon_cy = y0 + CH // 2 - 60
         r = 45
         draw.ellipse([cx-r, icon_cy-r, cx+r, icon_cy+r],
                      fill=None, outline="#FFFFFF", width=3)
         draw.text((cx, icon_cy), btn["icon"], fill="#FFFFFF",
-                  font=font_icon, anchor="mm")
+                  font=fonts["icon"], anchor="mm")
 
-        label_cy = y0 + CELL_H // 2 + 25
+        label_cy = y0 + CH // 2 + 25
         draw.text((cx, label_cy), btn["label"], fill="#FFFFFF",
-                  font=font_large, anchor="mm")
+                  font=fonts["large"], anchor="mm")
         draw.text((cx, label_cy + 55), btn["desc"], fill="#FFFFFFCC",
-                  font=font_small, anchor="mm")
+                  font=fonts["small"], anchor="mm")
 
-    # 이미지를 바이트로 변환
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, "PNG")
-    img_data = img_bytes.getvalue()
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
-    # ── Step 2: LINE API에 리치 메뉴 등록 ──
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    rich_menu = {
-        "size": {"width": MENU_W, "height": MENU_H},
+def _build_keyboard_image(fonts):
+    """키보드 모드 리치 메뉴 이미지 (메뉴로 돌아가기 바)"""
+    W, H = 2500, 243
+    img = Image.new("RGB", (W, H), "#37474F")
+    draw = ImageDraw.Draw(img)
+    draw.text((W // 2, H // 2), "▼ メニューを表示", fill="#FFFFFF",
+              font=fonts["bar"], anchor="mm")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _line_api(method, url, token, **kwargs):
+    """LINE API 호출 헬퍼"""
+    headers = kwargs.pop("headers", {})
+    headers["Authorization"] = f"Bearer {token}"
+    fn = getattr(http_requests, method)
+    return fn(url, headers=headers, **kwargs)
+
+
+@app.route("/admin/setup-richmenu", methods=["GET"])
+def setup_rich_menu():
+    """リッチメニュー (メイン ↔ キーボード切替) をワンクリック登録"""
+    token = config.LINE_CHANNEL_ACCESS_TOKEN
+    if not token:
+        return jsonify({"error": "LINE_CHANNEL_ACCESS_TOKEN not set"}), 500
+
+    results = {}
+
+    # ── Step 0: 기존 리치 메뉴 & 에일리어스 전부 삭제 ──
+    try:
+        aliases = _line_api("get", "https://api.line.me/v2/bot/richmenu/alias/list",
+                            token).json().get("aliases", [])
+        for a in aliases:
+            _line_api("delete",
+                      f"https://api.line.me/v2/bot/richmenu/alias/{a['richMenuAliasId']}",
+                      token)
+    except Exception:
+        pass
+
+    try:
+        old = _line_api("get", "https://api.line.me/v2/bot/richmenu/list",
+                        token).json().get("richmenus", [])
+        for m in old:
+            _line_api("delete",
+                      f"https://api.line.me/v2/bot/richmenu/{m['richMenuId']}", token)
+    except Exception:
+        pass
+
+    fonts = _load_fonts()
+
+    # ── Step 1: 메인 메뉴 (Menu A) 생성 ──
+    W, H = 2500, 843
+    CW, CH = W // 2, H // 2
+
+    menu_a_data = {
+        "size": {"width": W, "height": H},
         "selected": True,
-        "name": "eSIM Japan メニュー",
+        "name": "メインメニュー",
         "chatBarText": "メニューを開く",
-        "areas": [],
+        "areas": [
+            {"bounds": {"x": 0,  "y": 0,  "width": CW, "height": CH},
+             "action": {"type": "message", "label": "QRコード発行",
+                        "text": "QRコード発行"}},
+            {"bounds": {"x": CW, "y": 0,  "width": CW, "height": CH},
+             "action": {"type": "message", "label": "使い方ガイド",
+                        "text": "使い方ガイド"}},
+            {"bounds": {"x": 0,  "y": CH, "width": CW, "height": CH},
+             "action": {"type": "message", "label": "注文確認",
+                        "text": "注文確認"}},
+            {"bounds": {"x": CW, "y": CH, "width": CW, "height": CH},
+             "action": {"type": "richmenuswitch",
+                        "richMenuAliasId": "richmenu-keyboard",
+                        "data": "switch-to-keyboard"}},
+        ],
     }
-    for i, btn in enumerate(buttons):
-        col, row = i % COLS, i // COLS
-        rich_menu["areas"].append({
-            "bounds": {"x": col*CELL_W, "y": row*CELL_H,
-                       "width": CELL_W, "height": CELL_H},
-            "action": {"type": "message", "label": btn["label"],
-                       "text": btn["action"]},
-        })
 
-    # 2-1: 리치 메뉴 생성
-    r1 = http_requests.post("https://api.line.me/v2/bot/richmenu",
-                            headers=headers, json=rich_menu)
-    if r1.status_code != 200:
-        return jsonify({"error": "create failed", "detail": r1.text}), 500
+    r = _line_api("post", "https://api.line.me/v2/bot/richmenu", token,
+                  headers={"Content-Type": "application/json"}, json=menu_a_data)
+    if r.status_code != 200:
+        return jsonify({"error": "Menu A create failed", "detail": r.text}), 500
+    menu_a_id = r.json()["richMenuId"]
+    results["menuA"] = menu_a_id
 
-    menu_id = r1.json()["richMenuId"]
+    # Menu A 이미지 업로드
+    r = _line_api("post",
+                  f"https://api-data.line.me/v2/bot/richmenu/{menu_a_id}/content",
+                  token, headers={"Content-Type": "image/png"},
+                  data=_build_main_image(fonts))
+    if r.status_code != 200:
+        return jsonify({"error": "Menu A image failed", "detail": r.text}), 500
 
-    # 2-2: 이미지 업로드
-    r2 = http_requests.post(
-        f"https://api-data.line.me/v2/bot/richmenu/{menu_id}/content",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "image/png"},
-        data=img_data,
-    )
-    if r2.status_code != 200:
-        return jsonify({"error": "image upload failed", "detail": r2.text}), 500
+    # ── Step 2: 키보드 메뉴 (Menu B) 생성 ──
+    KB_H = 243
+    menu_b_data = {
+        "size": {"width": W, "height": KB_H},
+        "selected": False,
+        "name": "キーボードモード",
+        "chatBarText": "メニューを表示",
+        "areas": [
+            {"bounds": {"x": 0, "y": 0, "width": W, "height": KB_H},
+             "action": {"type": "richmenuswitch",
+                        "richMenuAliasId": "richmenu-main",
+                        "data": "switch-to-main"}},
+        ],
+    }
 
-    # 2-3: 기본 리치 메뉴 설정
-    r3 = http_requests.post(
-        f"https://api.line.me/v2/bot/user/all/richmenu/{menu_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    if r3.status_code != 200:
-        return jsonify({"error": "set default failed", "detail": r3.text}), 500
+    r = _line_api("post", "https://api.line.me/v2/bot/richmenu", token,
+                  headers={"Content-Type": "application/json"}, json=menu_b_data)
+    if r.status_code != 200:
+        return jsonify({"error": "Menu B create failed", "detail": r.text}), 500
+    menu_b_id = r.json()["richMenuId"]
+    results["menuB"] = menu_b_id
 
-    return jsonify({
-        "success": True,
-        "richMenuId": menu_id,
-        "message": "リッチメニューが正常に登録されました！LINEアプリで確認してください。",
-    })
+    # Menu B 이미지 업로드
+    r = _line_api("post",
+                  f"https://api-data.line.me/v2/bot/richmenu/{menu_b_id}/content",
+                  token, headers={"Content-Type": "image/png"},
+                  data=_build_keyboard_image(fonts))
+    if r.status_code != 200:
+        return jsonify({"error": "Menu B image failed", "detail": r.text}), 500
+
+    # ── Step 3: 에일리어스 등록 (richmenuswitch 연결) ──
+    for alias_id, mid in [("richmenu-main", menu_a_id),
+                          ("richmenu-keyboard", menu_b_id)]:
+        r = _line_api("post", "https://api.line.me/v2/bot/richmenu/alias", token,
+                      headers={"Content-Type": "application/json"},
+                      json={"richMenuAliasId": alias_id, "richMenuId": mid})
+        if r.status_code != 200:
+            return jsonify({"error": f"Alias {alias_id} failed",
+                            "detail": r.text}), 500
+
+    # ── Step 4: Menu A를 기본 리치 메뉴로 설정 ──
+    r = _line_api("post",
+                  f"https://api.line.me/v2/bot/user/all/richmenu/{menu_a_id}", token)
+    if r.status_code != 200:
+        return jsonify({"error": "set default failed", "detail": r.text}), 500
+
+    results["success"] = True
+    results["message"] = "リッチメニュー(メイン↔キーボード切替)が正常に登録されました！"
+    return jsonify(results)
 
 
 # ========== Startup ==========
