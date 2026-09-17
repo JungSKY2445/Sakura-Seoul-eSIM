@@ -259,6 +259,20 @@ def setup_rich_menu():
     if not token:
         return jsonify({"error": "LINE_CHANNEL_ACCESS_TOKEN not set"}), 500
 
+    # ── Step 0: 기존 리치 메뉴 전부 삭제 ──
+    auth_h = {"Authorization": f"Bearer {token}"}
+    try:
+        old_menus = http_requests.get(
+            "https://api.line.me/v2/bot/richmenu/list", headers=auth_h
+        ).json().get("richmenus", [])
+        for m in old_menus:
+            http_requests.delete(
+                f"https://api.line.me/v2/bot/richmenu/{m['richMenuId']}",
+                headers=auth_h,
+            )
+    except Exception:
+        pass  # 기존 메뉴 없으면 무시
+
     # ── Step 1: 리치 메뉴 이미지 생성 (메모리) ──
     MENU_W, MENU_H = 2500, 843
     COLS, ROWS = 2, 2
