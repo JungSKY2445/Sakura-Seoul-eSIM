@@ -30,6 +30,9 @@ import messages as msg
 # Flask app
 app = Flask(__name__)
 
+# DB 자동 초기화 (서버 시작 시)
+db.init_db()
+
 # LINE SDK v3 설정
 line_config = Configuration(access_token=config.LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(config.LINE_CHANNEL_SECRET)
