@@ -2,8 +2,11 @@
 LINE eSIM Bot - メインアプリケーション
 Amazon eSIM自動発行システム
 """
+import io
 import re
-from flask import Flask, request, abort
+import requests as http_requests
+from flask import Flask, request, abort, jsonify
+from PIL import Image, ImageDraw, ImageFont
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -245,6 +248,135 @@ def reply_messages(event, messages):
                 messages=messages,
             )
         )
+
+
+# ========== Admin: Rich Menu Setup ==========
+
+@app.route("/admin/setup-richmenu", methods=["GET"])
+def setup_rich_menu():
+    """リッチメニューをワンクリックで作成・登録"""
+    token = config.LINE_CHANNEL_ACCESS_TOKEN
+    if not token:
+        return jsonify({"error": "LINE_CHANNEL_ACCESS_TOKEN not set"}), 500
+
+    # ── Step 1: 리치 메뉴 이미지 생성 (메모리) ──
+    MENU_W, MENU_H = 2500, 843
+    COLS, ROWS = 2, 2
+    CELL_W, CELL_H = MENU_W // COLS, MENU_H // ROWS
+
+    buttons = [
+        {"label": "QRコード発行", "action": "QRコード発行",
+         "bg": "#2196F3", "desc": "eSIMを受け取る", "icon": "QR"},
+        {"label": "使い方ガイド", "action": "使い方ガイド",
+         "bg": "#4CAF50", "desc": "設定方法を確認", "icon": "?"},
+        {"label": "注文確認", "action": "注文確認",
+         "bg": "#FF9800", "desc": "注文状況をチェック", "icon": "!!"},
+        {"label": "お問い合わせ", "action": "お問い合わせ",
+         "bg": "#9C27B0", "desc": "サポートへ連絡", "icon": "@"},
+    ]
+
+    img = Image.new("RGB", (MENU_W, MENU_H), "#FFFFFF")
+    draw = ImageDraw.Draw(img)
+
+    # 폰트 로드
+    font_large = font_small = font_icon = None
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+    ]
+    for fp in font_paths:
+        try:
+            font_large = ImageFont.truetype(fp, 60)
+            font_small = ImageFont.truetype(fp, 36)
+            font_icon = ImageFont.truetype(fp, 40)
+            break
+        except Exception:
+            continue
+
+    if not font_large:
+        font_large = font_small = font_icon = ImageFont.load_default()
+
+    def hex_rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+    for i, btn in enumerate(buttons):
+        col, row = i % COLS, i // COLS
+        x0, y0 = col * CELL_W, row * CELL_H
+        x1, y1 = x0 + CELL_W, y0 + CELL_H
+        cx = x0 + CELL_W // 2
+
+        draw.rectangle([x0, y0, x1, y1], fill=hex_rgb(btn["bg"]))
+        draw.rectangle([x0, y0, x1, y1], outline="#FFFFFF", width=3)
+
+        icon_cy = y0 + CELL_H // 2 - 60
+        r = 45
+        draw.ellipse([cx-r, icon_cy-r, cx+r, icon_cy+r],
+                     fill=None, outline="#FFFFFF", width=3)
+        draw.text((cx, icon_cy), btn["icon"], fill="#FFFFFF",
+                  font=font_icon, anchor="mm")
+
+        label_cy = y0 + CELL_H // 2 + 25
+        draw.text((cx, label_cy), btn["label"], fill="#FFFFFF",
+                  font=font_large, anchor="mm")
+        draw.text((cx, label_cy + 55), btn["desc"], fill="#FFFFFFCC",
+                  font=font_small, anchor="mm")
+
+    # 이미지를 바이트로 변환
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, "PNG")
+    img_data = img_bytes.getvalue()
+
+    # ── Step 2: LINE API에 리치 메뉴 등록 ──
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    rich_menu = {
+        "size": {"width": MENU_W, "height": MENU_H},
+        "selected": True,
+        "name": "eSIM Japan メニュー",
+        "chatBarText": "メニューを開く",
+        "areas": [],
+    }
+    for i, btn in enumerate(buttons):
+        col, row = i % COLS, i // COLS
+        rich_menu["areas"].append({
+            "bounds": {"x": col*CELL_W, "y": row*CELL_H,
+                       "width": CELL_W, "height": CELL_H},
+            "action": {"type": "message", "label": btn["label"],
+                       "text": btn["action"]},
+        })
+
+    # 2-1: 리치 메뉴 생성
+    r1 = http_requests.post("https://api.line.me/v2/bot/richmenu",
+                            headers=headers, json=rich_menu)
+    if r1.status_code != 200:
+        return jsonify({"error": "create failed", "detail": r1.text}), 500
+
+    menu_id = r1.json()["richMenuId"]
+
+    # 2-2: 이미지 업로드
+    r2 = http_requests.post(
+        f"https://api-data.line.me/v2/bot/richmenu/{menu_id}/content",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "image/png"},
+        data=img_data,
+    )
+    if r2.status_code != 200:
+        return jsonify({"error": "image upload failed", "detail": r2.text}), 500
+
+    # 2-3: 기본 리치 메뉴 설정
+    r3 = http_requests.post(
+        f"https://api.line.me/v2/bot/user/all/richmenu/{menu_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if r3.status_code != 200:
+        return jsonify({"error": "set default failed", "detail": r3.text}), 500
+
+    return jsonify({
+        "success": True,
+        "richMenuId": menu_id,
+        "message": "リッチメニューが正常に登録されました！LINEアプリで確認してください。",
+    })
 
 
 # ========== Startup ==========
