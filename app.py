@@ -255,8 +255,12 @@ def handle_qr_issue(event, user_id, text):
         else:
             # LPA 데이터 → 서버에서 QR 이미지 생성
             token = db.generate_qr_token(order["order_id"])
+            # Railway 등 프록시 환경에서 HTTPS 강제
             base_url = request.url_root.rstrip("/")
+            if base_url.startswith("http://"):
+                base_url = "https://" + base_url[7:]
             qr_url = f"{base_url}/qr/{token}"
+            logger.info(f"QR image URL: {qr_url}")
             messages.append(
                 ImageMessage(
                     original_content_url=qr_url,
@@ -266,11 +270,20 @@ def handle_qr_issue(event, user_id, text):
 
     messages.append(TextMessage(text=delivery_text))
 
-    # 전달 완료 처리
-    db.mark_esim_delivered(order["order_id"])
-    db.update_session(user_id, "idle")
+    # reply 먼저 보내고 성공하면 delivered 처리
+    try:
+        reply_messages(event, messages)
+        db.mark_esim_delivered(order["order_id"])
+    except Exception as e:
+        logger.error(f"Reply failed, sending text only: {e}")
+        # 이미지 실패 시 텍스트만 재시도
+        try:
+            reply(event, delivery_text)
+            db.mark_esim_delivered(order["order_id"])
+        except Exception as e2:
+            logger.error(f"Text reply also failed: {e2}")
 
-    reply_messages(event, messages)
+    db.update_session(user_id, "idle")
 
 
 def handle_order_check(event, user_id, text):
@@ -372,6 +385,18 @@ def create_test_order():
         })
 
 
+@app.route("/admin/reset-test", methods=["POST"])
+@require_admin
+def reset_test_data():
+    """テストデータリセット（全注文削除 + eSIM在庫をunassignedに戻す）"""
+    conn = db.get_connection()
+    conn.execute("DELETE FROM order_mapping")
+    conn.execute("UPDATE esim_inventory SET status = 'unassigned', updated_at = CURRENT_TIMESTAMP")
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "全注文を削除し、eSIM在庫をリセットしました"})
+
+
 # ========== Admin: 업로드 페이지 ==========
 
 UPLOAD_PAGE_HTML = """<!DOCTYPE html>
@@ -441,6 +466,13 @@ input[type="file"] { display: none; }
   <button class="btn" onclick="syncOrders()">注文を同期する</button>
   <div class="loading" id="syncLoading">⏳ 同期中...</div>
   <div class="result" id="syncResult"></div>
+</div>
+
+<div class="card">
+  <h2>🗑️ テストデータリセット</h2>
+  <p style="font-size:13px;color:#888;margin-bottom:12px">全注文を削除し、eSIM在庫を未割当に戻します</p>
+  <button class="btn btn-danger" onclick="resetTest()">リセット実行</button>
+  <div class="result" id="resetResult"></div>
 </div>
 
 <script>
@@ -550,6 +582,23 @@ async function createTestOrder() {
     result.textContent = '❌ ' + e.message;
   }
   result.style.display = 'block'; loading.style.display = 'none';
+}
+
+// リセット
+async function resetTest() {
+  if (!confirm('本当にリセットしますか？全注文が削除されます。')) return;
+  const result = document.getElementById('resetResult');
+  try {
+    const r = await fetch(BASE + '/admin/reset-test?key=' + KEY, { method: 'POST' });
+    const d = await r.json();
+    result.className = 'result success';
+    result.textContent = '✅ ' + d.message;
+    loadStats();
+  } catch(e) {
+    result.className = 'result error';
+    result.textContent = '❌ ' + e.message;
+  }
+  result.style.display = 'block';
 }
 
 loadStats();
