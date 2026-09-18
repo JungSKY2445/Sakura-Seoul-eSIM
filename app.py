@@ -297,6 +297,166 @@ def sync_orders():
     return jsonify(result)
 
 
+# ========== Admin: 업로드 페이지 ==========
+
+UPLOAD_PAGE_HTML = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>eSIM Admin</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; background: #f5f5f5; padding: 20px; }
+.card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 600px; margin: 16px auto; }
+h1 { font-size: 20px; margin-bottom: 16px; color: #333; }
+h2 { font-size: 16px; margin-bottom: 12px; color: #555; }
+.upload-area { border: 2px dashed #ccc; border-radius: 8px; padding: 32px;
+               text-align: center; cursor: pointer; transition: border-color 0.2s; }
+.upload-area:hover { border-color: #2196F3; }
+.upload-area.dragover { border-color: #2196F3; background: #E3F2FD; }
+input[type="file"] { display: none; }
+.btn { background: #2196F3; color: #fff; border: none; padding: 12px 24px;
+       border-radius: 8px; font-size: 15px; cursor: pointer; width: 100%; margin-top: 12px; }
+.btn:hover { background: #1976D2; }
+.btn:disabled { background: #ccc; cursor: not-allowed; }
+.btn-danger { background: #f44336; }
+.btn-danger:hover { background: #d32f2f; }
+.result { margin-top: 16px; padding: 16px; border-radius: 8px; font-size: 14px; display: none; }
+.result.success { background: #E8F5E9; color: #2E7D32; }
+.result.error { background: #FFEBEE; color: #C62828; }
+.stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.stat { background: #f9f9f9; padding: 12px; border-radius: 8px; text-align: center; }
+.stat-num { font-size: 24px; font-weight: bold; color: #2196F3; }
+.stat-label { font-size: 12px; color: #888; margin-top: 4px; }
+.loading { display: none; text-align: center; margin-top: 12px; color: #888; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>📱 eSIM 在庫管理</h1>
+  <div id="stats"><div class="loading" style="display:block">読み込み中...</div></div>
+</div>
+
+<div class="card">
+  <h2>📤 在庫アップロード</h2>
+  <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <p style="font-size:32px;margin-bottom:8px">📁</p>
+    <p>Excelファイルをドラッグ＆ドロップ</p>
+    <p style="color:#aaa;font-size:13px;margin-top:4px">またはクリックして選択</p>
+  </div>
+  <input type="file" id="fileInput" accept=".xlsx,.xls">
+  <div id="fileName" style="margin-top:8px;color:#555;font-size:14px"></div>
+  <button class="btn" id="uploadBtn" onclick="upload()" disabled>アップロード</button>
+  <div class="loading" id="uploadLoading">⏳ アップロード中...</div>
+  <div class="result" id="uploadResult"></div>
+</div>
+
+<div class="card">
+  <h2>🔄 Amazon注文同期</h2>
+  <button class="btn" onclick="syncOrders()">注文を同期する</button>
+  <div class="loading" id="syncLoading">⏳ 同期中...</div>
+  <div class="result" id="syncResult"></div>
+</div>
+
+<script>
+const KEY = new URLSearchParams(location.search).get('key') || '';
+const BASE = location.origin;
+
+// 統計
+async function loadStats() {
+  try {
+    const r = await fetch(BASE + '/admin/stats?key=' + KEY);
+    const d = await r.json();
+    if (d.error) { document.getElementById('stats').innerHTML = '<p style="color:red">' + d.error + '</p>'; return; }
+    const s = d.inventory;
+    document.getElementById('stats').innerHTML =
+      '<div class="stats">' +
+      '<div class="stat"><div class="stat-num">' + s.total + '</div><div class="stat-label">総数</div></div>' +
+      '<div class="stat"><div class="stat-num">' + s.unassigned + '</div><div class="stat-label">未割当</div></div>' +
+      '<div class="stat"><div class="stat-num">' + s.assigned + '</div><div class="stat-label">割当済</div></div>' +
+      '<div class="stat"><div class="stat-num">' + s.delivered + '</div><div class="stat-label">配信済</div></div>' +
+      '</div>';
+  } catch(e) { document.getElementById('stats').innerHTML = '<p style="color:red">読み込み失敗</p>'; }
+}
+
+// ファイル選択
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
+let selectedFile = null;
+
+fileInput.addEventListener('change', (e) => { selectFile(e.target.files[0]); });
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); selectFile(e.dataTransfer.files[0]); });
+
+function selectFile(f) {
+  if (!f) return;
+  selectedFile = f;
+  document.getElementById('fileName').textContent = '📎 ' + f.name;
+  document.getElementById('uploadBtn').disabled = false;
+}
+
+// アップロード
+async function upload() {
+  if (!selectedFile) return;
+  const btn = document.getElementById('uploadBtn');
+  const loading = document.getElementById('uploadLoading');
+  const result = document.getElementById('uploadResult');
+  btn.disabled = true; loading.style.display = 'block'; result.style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', selectedFile);
+    const r = await fetch(BASE + '/admin/upload-inventory?key=' + KEY, { method: 'POST', body: fd });
+    const d = await r.json();
+    if (d.success) {
+      result.className = 'result success';
+      result.innerHTML = '✅ 追加: ' + d.added + '件 / スキップ(重複): ' + d.skipped_duplicates + '件' +
+        (d.errors.length ? '<br>⚠️ エラー: ' + d.errors.join(', ') : '');
+      loadStats();
+    } else {
+      result.className = 'result error';
+      result.textContent = '❌ ' + (d.error || 'アップロード失敗');
+    }
+  } catch(e) {
+    result.className = 'result error';
+    result.textContent = '❌ 通信エラー: ' + e.message;
+  }
+  result.style.display = 'block'; loading.style.display = 'none'; btn.disabled = false;
+}
+
+// 注文同期
+async function syncOrders() {
+  const loading = document.getElementById('syncLoading');
+  const result = document.getElementById('syncResult');
+  loading.style.display = 'block'; result.style.display = 'none';
+  try {
+    const r = await fetch(BASE + '/admin/sync-orders?key=' + KEY);
+    const d = await r.json();
+    result.className = 'result success';
+    result.innerHTML = '新規: ' + d.new + ' / マッチ: ' + d.matched + ' / スキップ: ' + d.skipped + ' / エラー: ' + d.errors;
+  } catch(e) {
+    result.className = 'result error';
+    result.textContent = '❌ ' + e.message;
+  }
+  result.style.display = 'block'; loading.style.display = 'none';
+}
+
+loadStats();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/admin/dashboard", methods=["GET"])
+@require_admin
+def admin_dashboard():
+    """Admin 管理画面"""
+    return UPLOAD_PAGE_HTML
+
+
 # ========== Admin: eSIM 재고 업로드 ==========
 
 def _parse_plan_days(plan_str):
