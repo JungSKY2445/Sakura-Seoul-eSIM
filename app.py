@@ -210,6 +210,8 @@ def handle_qr_issue(event, user_id, text):
         plan_name=order.get("plan_name", "—"),
         data_amount=order.get("data_amount", "—"),
         validity_days=order.get("validity_days", "—"),
+        sm_dp_address=order.get("sm_dp_address", "—"),
+        activation_code=order.get("activation_code", "—"),
     )
 
     messages = []
