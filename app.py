@@ -297,6 +297,41 @@ def sync_orders():
     return jsonify(result)
 
 
+@app.route("/admin/create-test-order", methods=["POST"])
+@require_admin
+def create_test_order():
+    """テスト注文作成 + eSIM自動マッチング"""
+    import random
+    # テスト用Amazon注文番号生成 (250-xxxxxxx-xxxxxxx)
+    order_num = f"250-{random.randint(1000000,9999999)}-{random.randint(1000000,9999999)}"
+
+    created = db.create_order(
+        order_id=order_num,
+        amazon_order_id=order_num,
+        buyer_email="test@example.com",
+    )
+    if not created:
+        return jsonify({"error": "Order creation failed"}), 400
+
+    # 미할당 eSIM 자동 매칭
+    esim = db.get_unassigned_esim()
+    if esim:
+        db.assign_esim_to_order(esim["id"], order_num)
+        return jsonify({
+            "success": True,
+            "order_id": order_num,
+            "matched_iccid": esim["iccid"],
+            "message": f"LINEで「{order_num}」を入力してテストしてください"
+        })
+    else:
+        return jsonify({
+            "success": True,
+            "order_id": order_num,
+            "matched_iccid": None,
+            "message": "注文作成済み（未マッチ：eSIM在庫なし）"
+        })
+
+
 # ========== Admin: 업로드 페이지 ==========
 
 UPLOAD_PAGE_HTML = """<!DOCTYPE html>
@@ -351,6 +386,14 @@ input[type="file"] { display: none; }
   <button class="btn" id="uploadBtn" onclick="upload()" disabled>アップロード</button>
   <div class="loading" id="uploadLoading">⏳ アップロード中...</div>
   <div class="result" id="uploadResult"></div>
+</div>
+
+<div class="card">
+  <h2>🧪 テスト注文作成</h2>
+  <p style="font-size:13px;color:#888;margin-bottom:12px">テスト用の注文番号を生成し、eSIMを自動マッチングします</p>
+  <button class="btn" style="background:#FF9800" onclick="createTestOrder()">テスト注文を作成</button>
+  <div class="loading" id="testLoading">⏳ 作成中...</div>
+  <div class="result" id="testResult"></div>
 </div>
 
 <div class="card">
@@ -437,6 +480,31 @@ async function syncOrders() {
     const d = await r.json();
     result.className = 'result success';
     result.innerHTML = '新規: ' + d.new + ' / マッチ: ' + d.matched + ' / スキップ: ' + d.skipped + ' / エラー: ' + d.errors;
+  } catch(e) {
+    result.className = 'result error';
+    result.textContent = '❌ ' + e.message;
+  }
+  result.style.display = 'block'; loading.style.display = 'none';
+}
+
+// テスト注文作成
+async function createTestOrder() {
+  const loading = document.getElementById('testLoading');
+  const result = document.getElementById('testResult');
+  loading.style.display = 'block'; result.style.display = 'none';
+  try {
+    const r = await fetch(BASE + '/admin/create-test-order?key=' + KEY, { method: 'POST' });
+    const d = await r.json();
+    if (d.success) {
+      result.className = 'result success';
+      result.innerHTML = '✅ 注文番号: <strong>' + d.order_id + '</strong><br>' +
+        (d.matched_iccid ? 'マッチ済みICCID: ' + d.matched_iccid : '⚠️ eSIM在庫なし') +
+        '<br><br>📱 LINEで上の注文番号を入力してテストしてください';
+      loadStats();
+    } else {
+      result.className = 'result error';
+      result.textContent = '❌ ' + (d.error || '作成失敗');
+    }
   } catch(e) {
     result.className = 'result error';
     result.textContent = '❌ ' + e.message;
