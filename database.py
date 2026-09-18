@@ -23,6 +23,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS esim_inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             iccid TEXT UNIQUE NOT NULL,
+            rental_number TEXT,
+            phone_number TEXT,
             sm_dp_address TEXT,
             activation_code TEXT,
             qr_code_data TEXT,
@@ -37,6 +39,13 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # 기존 테이블에 컬럼 추가 (마이그레이션 대응)
+    for col in ["rental_number", "phone_number"]:
+        try:
+            cursor.execute(f"ALTER TABLE esim_inventory ADD COLUMN {col} TEXT")
+        except Exception:
+            pass  # 이미 존재
 
     # 주문 매칭 테이블
     cursor.execute("""
@@ -73,16 +82,19 @@ def init_db():
 # ========== eSIM 재고 관리 ==========
 
 def add_esim(iccid, sm_dp_address, activation_code, qr_code_data,
-             plan_name, data_amount, validity_days, country="JP"):
+             plan_name, data_amount, validity_days, country="JP",
+             rental_number=None, phone_number=None):
     """eSIM 재고 1건 추가"""
     conn = get_connection()
     try:
         conn.execute("""
             INSERT INTO esim_inventory
-            (iccid, sm_dp_address, activation_code, qr_code_data,
+            (iccid, rental_number, phone_number, sm_dp_address,
+             activation_code, qr_code_data,
              plan_name, data_amount, validity_days, country)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (iccid, sm_dp_address, activation_code, qr_code_data,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (iccid, rental_number, phone_number, sm_dp_address,
+              activation_code, qr_code_data,
               plan_name, data_amount, validity_days, country))
         conn.commit()
         return True

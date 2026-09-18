@@ -299,13 +299,44 @@ def sync_orders():
 
 # ========== Admin: eSIM 재고 업로드 ==========
 
+def _parse_plan_days(plan_str):
+    """Plan 문자열에서 유효기간(일) 파싱. 예: '1DAYS' → 1, '7DAYS' → 7, '30days' → 30"""
+    if not plan_str:
+        return 0
+    plan_str = str(plan_str).strip().upper()
+    m = re.search(r'(\d+)\s*DAY', plan_str)
+    return int(m.group(1)) if m else 0
+
+
+# 원본 Excel 컬럼명 → DB 컬럼명 매핑 (대소문자 무시)
+COLUMN_MAP = {
+    "iccid": "iccid",
+    "sm-dp+address": "sm_dp_address",
+    "sm_dp_address": "sm_dp_address",
+    "smdp+address": "sm_dp_address",
+    "activation code": "activation_code",
+    "activation_code": "activation_code",
+    "qr_code": "qr_code_data",
+    "qr_code_data": "qr_code_data",
+    "plan": "plan_name",
+    "plan_name": "plan_name",
+    "data_amount": "data_amount",
+    "validity_days": "validity_days",
+    "country": "country",
+    "렌탈관리번호": "rental_number",
+    "rental_number": "rental_number",
+    "phone no.": "phone_number",
+    "phone_number": "phone_number",
+    "phone no": "phone_number",
+}
+
+
 @app.route("/admin/upload-inventory", methods=["POST"])
 @require_admin
 def upload_inventory():
     """Excel 파일로 eSIM 재고 업로드
 
-    Excel 컬럼: iccid, sm_dp_address, activation_code, qr_code_data,
-                plan_name, data_amount, validity_days, country(옵션)
+    원본 형식 (SM-DP+Address, Activation Code, QR_CODE 등) 자동 인식
     """
     import openpyxl
 
@@ -317,32 +348,54 @@ def upload_inventory():
         wb = openpyxl.load_workbook(io.BytesIO(f.read()), read_only=True)
         ws = wb.active
 
-        # 헤더 읽기
-        headers = [str(cell.value).strip().lower() if cell.value else "" for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        # 헤더 읽기 + 컬럼 매핑
+        raw_headers = [str(cell.value).strip() if cell.value else "" for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        mapped_headers = []
+        for h in raw_headers:
+            key = h.lower().replace("+", "+")
+            mapped = COLUMN_MAP.get(key, key)
+            mapped_headers.append(mapped)
+
+        # 필수 컬럼 확인
         required = {"iccid", "activation_code", "qr_code_data"}
-        if not required.issubset(set(headers)):
-            missing = required - set(headers)
-            return jsonify({"error": f"Missing columns: {', '.join(missing)}"}), 400
+        found = set(mapped_headers)
+        if not required.issubset(found):
+            missing = required - found
+            return jsonify({
+                "error": f"Missing columns: {', '.join(missing)}",
+                "detected_columns": mapped_headers,
+                "hint": "Expected: ICCID, SM-DP+Address (or sm_dp_address), Activation Code, QR_CODE (or qr_code_data)"
+            }), 400
 
         added = 0
         skipped = 0
         errors = []
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            data = dict(zip(headers, row))
+            data = dict(zip(mapped_headers, row))
             iccid = str(data.get("iccid", "")).strip()
             if not iccid:
                 continue
 
+            # Plan에서 validity_days 자동 파싱
+            plan_name = str(data.get("plan_name", "") or "").strip()
+            validity_days = data.get("validity_days")
+            if not validity_days:
+                validity_days = _parse_plan_days(plan_name)
+            else:
+                validity_days = int(validity_days)
+
             try:
                 ok = db.add_esim(
                     iccid=iccid,
+                    rental_number=str(data.get("rental_number", "") or "").strip() or None,
+                    phone_number=str(data.get("phone_number", "") or "").strip() or None,
                     sm_dp_address=str(data.get("sm_dp_address", "") or "").strip(),
                     activation_code=str(data.get("activation_code", "") or "").strip(),
                     qr_code_data=str(data.get("qr_code_data", "") or "").strip(),
-                    plan_name=str(data.get("plan_name", "") or "").strip(),
+                    plan_name=plan_name,
                     data_amount=str(data.get("data_amount", "") or "").strip(),
-                    validity_days=int(data.get("validity_days") or 0),
+                    validity_days=validity_days,
                     country=str(data.get("country", "JP") or "JP").strip(),
                 )
                 if ok:
