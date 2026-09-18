@@ -4,6 +4,9 @@ Amazon eSIM自動発行システム
 """
 import io
 import re
+import secrets
+import functools
+import logging
 import requests as http_requests
 from flask import Flask, request, abort, jsonify
 from PIL import Image, ImageDraw, ImageFont
@@ -44,6 +47,33 @@ handler = WebhookHandler(config.LINE_CHANNEL_SECRET)
 # Amazon 주문번호 정규식 (예: 250-1234567-1234567)
 AMAZON_ORDER_PATTERN = re.compile(r'^\d{3}-\d{7}-\d{7}$')
 
+logger = logging.getLogger(__name__)
+
+
+# ========== Admin 인증 ==========
+
+def require_admin(f):
+    """Admin API 키 인증 데코레이터"""
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not config.ADMIN_API_KEY:
+            logger.warning("ADMIN_API_KEY not set — admin access blocked")
+            return jsonify({"error": "Admin access not configured"}), 403
+
+        # Header: Authorization: Bearer <key>  또는  ?key=<key>
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            provided_key = auth[7:]
+        else:
+            provided_key = request.args.get("key", "")
+
+        if not provided_key or not secrets.compare_digest(provided_key, config.ADMIN_API_KEY):
+            logger.warning(f"Admin auth failed from {request.remote_addr}")
+            return jsonify({"error": "Unauthorized"}), 401
+
+        return f(*args, **kwargs)
+    return decorated
+
 
 # ========== Webhook Endpoint ==========
 
@@ -71,11 +101,16 @@ def callback():
 
 @app.route("/health", methods=["GET"])
 def health():
+    """기본 헬스체크 (인증 불필요)"""
+    return {"status": "ok"}
+
+
+@app.route("/admin/stats", methods=["GET"])
+@require_admin
+def admin_stats():
+    """재고 현황 (인증 필요)"""
     stats = db.get_inventory_stats()
-    return {
-        "status": "ok",
-        "inventory": stats,
-    }
+    return jsonify({"status": "ok", "inventory": stats})
 
 
 # ========== Event Handlers ==========
@@ -254,11 +289,79 @@ def reply_messages(event, messages):
 # ========== Admin: Order Sync ==========
 
 @app.route("/admin/sync-orders", methods=["GET"])
+@require_admin
 def sync_orders():
     """Amazon 주문 수동 동기화"""
     hours = request.args.get("hours", 24, type=int)
     result = amazon_api.sync_orders(hours_back=hours)
     return jsonify(result)
+
+
+# ========== Admin: eSIM 재고 업로드 ==========
+
+@app.route("/admin/upload-inventory", methods=["POST"])
+@require_admin
+def upload_inventory():
+    """Excel 파일로 eSIM 재고 업로드
+
+    Excel 컬럼: iccid, sm_dp_address, activation_code, qr_code_data,
+                plan_name, data_amount, validity_days, country(옵션)
+    """
+    import openpyxl
+
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(f.read()), read_only=True)
+        ws = wb.active
+
+        # 헤더 읽기
+        headers = [str(cell.value).strip().lower() if cell.value else "" for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        required = {"iccid", "activation_code", "qr_code_data"}
+        if not required.issubset(set(headers)):
+            missing = required - set(headers)
+            return jsonify({"error": f"Missing columns: {', '.join(missing)}"}), 400
+
+        added = 0
+        skipped = 0
+        errors = []
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            data = dict(zip(headers, row))
+            iccid = str(data.get("iccid", "")).strip()
+            if not iccid:
+                continue
+
+            try:
+                ok = db.add_esim(
+                    iccid=iccid,
+                    sm_dp_address=str(data.get("sm_dp_address", "") or "").strip(),
+                    activation_code=str(data.get("activation_code", "") or "").strip(),
+                    qr_code_data=str(data.get("qr_code_data", "") or "").strip(),
+                    plan_name=str(data.get("plan_name", "") or "").strip(),
+                    data_amount=str(data.get("data_amount", "") or "").strip(),
+                    validity_days=int(data.get("validity_days") or 0),
+                    country=str(data.get("country", "JP") or "JP").strip(),
+                )
+                if ok:
+                    added += 1
+                else:
+                    skipped += 1  # 중복 ICCID
+            except Exception as e:
+                errors.append(f"Row {row_idx}: {str(e)}")
+
+        wb.close()
+        return jsonify({
+            "success": True,
+            "added": added,
+            "skipped_duplicates": skipped,
+            "errors": errors,
+        })
+
+    except Exception as e:
+        return jsonify({"error": f"File processing failed: {str(e)}"}), 400
 
 
 # ========== Admin: Rich Menu Setup ==========
@@ -350,6 +453,7 @@ def _line_api(method, url, token, **kwargs):
 
 
 @app.route("/admin/setup-richmenu", methods=["GET"])
+@require_admin
 def setup_rich_menu():
     """リッチメニュー (メイン ↔ キーボード切替) をワンクリック登録"""
     token = config.LINE_CHANNEL_ACCESS_TOKEN
