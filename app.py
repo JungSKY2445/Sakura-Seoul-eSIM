@@ -4,11 +4,13 @@ Amazon eSIM自動発行システム
 """
 import io
 import re
+import hashlib
 import secrets
 import functools
 import logging
+import qrcode
 import requests as http_requests
-from flask import Flask, request, abort, jsonify
+from flask import Flask, request, abort, jsonify, send_file, Response
 from PIL import Image, ImageDraw, ImageFont
 
 from linebot.v3 import WebhookHandler
@@ -103,6 +105,27 @@ def callback():
 def health():
     """기본 헬스체크 (인증 불필요)"""
     return {"status": "ok"}
+
+
+@app.route("/qr/<token>", methods=["GET"])
+def serve_qr_image(token):
+    """QR코드 이미지 제공 (토큰 인증으로 외부 노출 방지)"""
+    # 토큰으로 주문 조회
+    order = db.get_order_by_qr_token(token)
+    if not order or not order.get("qr_code_data"):
+        abort(404)
+
+    # QR코드 이미지 생성
+    qr = qrcode.QRCode(version=1, box_size=10, border=4,
+                        error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data(order["qr_code_data"])
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return Response(buf.getvalue(), mimetype="image/png")
 
 
 @app.route("/admin/stats", methods=["GET"])
@@ -216,15 +239,28 @@ def handle_qr_issue(event, user_id, text):
 
     messages = []
 
-    # QR코드 이미지가 있으면 이미지 메시지 추가
+    # QR코드 이미지 전송
     qr_code_data = order.get("qr_code_data")
-    if qr_code_data and qr_code_data.startswith("http"):
-        messages.append(
-            ImageMessage(
-                original_content_url=qr_code_data,
-                preview_image_url=qr_code_data,
+    if qr_code_data:
+        if qr_code_data.startswith("http"):
+            # 외부 URL 이미지
+            messages.append(
+                ImageMessage(
+                    original_content_url=qr_code_data,
+                    preview_image_url=qr_code_data,
+                )
             )
-        )
+        else:
+            # LPA 데이터 → 서버에서 QR 이미지 생성
+            token = db.generate_qr_token(order["order_id"])
+            base_url = request.url_root.rstrip("/")
+            qr_url = f"{base_url}/qr/{token}"
+            messages.append(
+                ImageMessage(
+                    original_content_url=qr_url,
+                    preview_image_url=qr_url,
+                )
+            )
 
     messages.append(TextMessage(text=delivery_text))
 

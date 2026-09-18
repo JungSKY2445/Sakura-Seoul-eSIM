@@ -56,6 +56,7 @@ def init_db():
             buyer_email TEXT,
             esim_id INTEGER,
             line_user_id TEXT,
+            qr_token TEXT UNIQUE,
             status TEXT DEFAULT 'pending'
                 CHECK(status IN ('pending', 'matched', 'delivered')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -63,6 +64,12 @@ def init_db():
             FOREIGN KEY (esim_id) REFERENCES esim_inventory(id)
         )
     """)
+
+    # 기존 테이블에 qr_token 컬럼 추가 (마이그레이션)
+    try:
+        cursor.execute("ALTER TABLE order_mapping ADD COLUMN qr_token TEXT UNIQUE")
+    except Exception:
+        pass
 
     # LINE 유저 세션 테이블
     cursor.execute("""
@@ -191,6 +198,39 @@ def get_order_by_amazon_id(amazon_order_id):
         LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
         WHERE om.amazon_order_id = ?
     """, (amazon_order_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def generate_qr_token(order_id):
+    """주문에 대한 QR 토큰 생성/반환"""
+    import secrets as _secrets
+    conn = get_connection()
+    # 이미 토큰이 있으면 반환
+    row = conn.execute("SELECT qr_token FROM order_mapping WHERE order_id = ?",
+                       (order_id,)).fetchone()
+    if row and row["qr_token"]:
+        conn.close()
+        return row["qr_token"]
+    # 새 토큰 생성
+    token = _secrets.token_urlsafe(16)
+    conn.execute("UPDATE order_mapping SET qr_token = ? WHERE order_id = ?",
+                 (token, order_id))
+    conn.commit()
+    conn.close()
+    return token
+
+
+def get_order_by_qr_token(token):
+    """QR 토큰으로 주문+eSIM 조회"""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT om.*, ei.iccid, ei.sm_dp_address, ei.activation_code,
+               ei.qr_code_data, ei.plan_name, ei.data_amount, ei.validity_days
+        FROM order_mapping om
+        LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
+        WHERE om.qr_token = ?
+    """, (token,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
