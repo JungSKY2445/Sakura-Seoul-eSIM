@@ -51,6 +51,8 @@ ESIM_DELIVERED = """🎉 eSIM QRコードの発行が完了しました！
 
 📡 eSIM設定情報
 ━━━━━━━━━━━━━━
+電話番号：{phone_number}
+レンタル管理番号：{rental_number}
 SM-DP+：{sm_dp_address}
 アクティベーションコード：{activation_code}
 ━━━━━━━━━━━━━━

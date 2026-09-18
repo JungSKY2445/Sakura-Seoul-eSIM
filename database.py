@@ -178,7 +178,8 @@ def get_order_by_id(order_id):
     """주문번호로 주문 조회"""
     conn = get_connection()
     row = conn.execute("""
-        SELECT om.*, ei.iccid, ei.sm_dp_address, ei.activation_code,
+        SELECT om.*, ei.iccid, ei.rental_number, ei.phone_number,
+               ei.sm_dp_address, ei.activation_code,
                ei.qr_code_data, ei.plan_name, ei.data_amount, ei.validity_days
         FROM order_mapping om
         LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
@@ -192,7 +193,8 @@ def get_order_by_amazon_id(amazon_order_id):
     """아마존 주문번호로 조회"""
     conn = get_connection()
     row = conn.execute("""
-        SELECT om.*, ei.iccid, ei.sm_dp_address, ei.activation_code,
+        SELECT om.*, ei.iccid, ei.rental_number, ei.phone_number,
+               ei.sm_dp_address, ei.activation_code,
                ei.qr_code_data, ei.plan_name, ei.data_amount, ei.validity_days
         FROM order_mapping om
         LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
@@ -225,7 +227,8 @@ def get_order_by_qr_token(token):
     """QR 토큰으로 주문+eSIM 조회"""
     conn = get_connection()
     row = conn.execute("""
-        SELECT om.*, ei.iccid, ei.sm_dp_address, ei.activation_code,
+        SELECT om.*, ei.iccid, ei.rental_number, ei.phone_number,
+               ei.sm_dp_address, ei.activation_code,
                ei.qr_code_data, ei.plan_name, ei.data_amount, ei.validity_days
         FROM order_mapping om
         LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
