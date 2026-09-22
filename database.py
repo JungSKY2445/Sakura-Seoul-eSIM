@@ -111,14 +111,21 @@ def add_esim(iccid, sm_dp_address, activation_code, qr_code_data,
         conn.close()
 
 
-def get_unassigned_esim():
-    """미할당 eSIM 1건 가져오기 (FIFO)"""
+def get_unassigned_esim(plan_name=None):
+    """미할당 eSIM 1건 가져오기 (FIFO, 플랜 매칭)"""
     conn = get_connection()
-    row = conn.execute("""
-        SELECT * FROM esim_inventory
-        WHERE status = 'unassigned'
-        ORDER BY id ASC LIMIT 1
-    """).fetchone()
+    if plan_name:
+        row = conn.execute("""
+            SELECT * FROM esim_inventory
+            WHERE status = 'unassigned' AND UPPER(plan_name) = UPPER(?)
+            ORDER BY id ASC LIMIT 1
+        """, (plan_name,)).fetchone()
+    else:
+        row = conn.execute("""
+            SELECT * FROM esim_inventory
+            WHERE status = 'unassigned'
+            ORDER BY id ASC LIMIT 1
+        """).fetchone()
     conn.close()
     return dict(row) if row else None
 

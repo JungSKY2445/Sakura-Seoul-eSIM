@@ -86,6 +86,21 @@ def is_esim_product(item):
     return sku in esim_skus
 
 
+# SKU → 플랜명 매핑
+SKU_TO_PLAN = {
+    "SKUN1": "1DAYS",
+    "SKUN3": "3DAYS",
+    "SKUN5": "5DAYS",
+    "SKUN7": "7DAYS",
+    "SKUN10": "10DAYS",
+    "SKUN15": "15DAYS",
+    "SKUN20": "20DAYS",
+    "SKUN30": "30DAYS",
+    "SKUN60": "60DAYS",
+    "SKUN90": "90DAYS",
+}
+
+
 def sync_orders(hours_back=24):
     """주문 동기화: Amazon → DB + eSIM 자동 매칭
 
@@ -142,8 +157,11 @@ def sync_orders(hours_back=24):
 
                     result["new"] += 1
 
-                    # eSIM 자동 매칭
-                    esim = db.get_unassigned_esim()
+                    # SKU → 플랜 매칭
+                    plan_name = SKU_TO_PLAN.get(sku)
+
+                    # eSIM 자동 매칭 (플랜별)
+                    esim = db.get_unassigned_esim(plan_name=plan_name)
                     if esim:
                         db.assign_esim_to_order(esim["id"], order_id)
                         result["matched"] += 1
