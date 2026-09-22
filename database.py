@@ -238,6 +238,33 @@ def get_order_by_qr_token(token):
     return dict(row) if row else None
 
 
+def get_all_esims(limit=20, offset=0, status=None, search=None, plan=None):
+    """eSIM 재고 목록 조회"""
+    conn = get_connection()
+    query = "SELECT * FROM esim_inventory"
+    params = []
+    conditions = []
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+    if plan:
+        conditions.append("plan_name = ?")
+        params.append(plan)
+    if search:
+        conditions.append("(iccid LIKE ? OR phone_number LIKE ? OR rental_number LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    count_q = query.replace("SELECT *", "SELECT COUNT(*)")
+    total = conn.execute(count_q, params).fetchone()[0]
+    query += " ORDER BY id ASC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows], total
+
+
 def get_all_orders(limit=100, offset=0, status=None, search=None):
     """주문 목록 조회 (페이징, 필터, 검색)"""
     conn = get_connection()

@@ -115,12 +115,14 @@ def serve_qr_image(token):
     if not order or not order.get("qr_code_data"):
         abort(404)
 
-    # QR코드 이미지 생성
-    qr = qrcode.QRCode(version=1, box_size=10, border=4,
-                        error_correction=qrcode.constants.ERROR_CORRECT_M)
+    # QR코드 이미지 생성 (api.qrserver.com 200x200 스타일과 동일)
+    qr = qrcode.QRCode(version=None, box_size=5, border=2,
+                        error_correction=qrcode.constants.ERROR_CORRECT_L)
     qr.add_data(order["qr_code_data"])
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
+    # 200x200으로 리사이즈
+    img = img.resize((200, 200), Image.NEAREST)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -146,6 +148,19 @@ def admin_orders():
     search = request.args.get("search") or None
     orders, total = db.get_all_orders(limit=limit, offset=offset, status=status, search=search)
     return jsonify({"orders": orders, "total": total, "limit": limit, "offset": offset})
+
+
+@app.route("/admin/esims", methods=["GET"])
+@require_admin
+def admin_esims():
+    """eSIM 재고 목록 조회 API"""
+    limit = int(request.args.get("limit", 20))
+    offset = int(request.args.get("offset", 0))
+    status = request.args.get("status") or None
+    search = request.args.get("search") or None
+    plan = request.args.get("plan") or None
+    esims, total = db.get_all_esims(limit=limit, offset=offset, status=status, search=search, plan=plan)
+    return jsonify({"esims": esims, "total": total, "limit": limit, "offset": offset})
 
 
 # ========== Event Handlers ==========
@@ -449,6 +464,31 @@ input[type="file"] { display: none; }
 </div>
 
 <div class="card">
+  <h2>📦 eSIM在庫一覧</h2>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <input type="text" id="esimSearch" placeholder="ICCID・電話番号で検索"
+      style="flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+    <select id="esimStatus" style="padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+      <option value="">全て</option>
+      <option value="unassigned">未割当</option>
+      <option value="assigned">割当済</option>
+      <option value="delivered">配信済</option>
+    </select>
+    <select id="esimPlan" style="padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+      <option value="">全プラン</option>
+      <option value="1DAYS">1日</option><option value="3DAYS">3日</option>
+      <option value="5DAYS">5日</option><option value="7DAYS">7日</option>
+      <option value="10DAYS">10日</option><option value="15DAYS">15日</option>
+      <option value="20DAYS">20日</option><option value="30DAYS">30日</option>
+      <option value="60DAYS">60日</option><option value="90DAYS">90日</option>
+    </select>
+    <button onclick="loadEsims(0)" style="padding:8px 16px;background:#4CAF50;color:#fff;border:none;border-radius:6px;cursor:pointer">検索</button>
+  </div>
+  <div id="esimList" style="font-size:13px">読み込み中...</div>
+  <div id="esimPaging" style="text-align:center;margin-top:12px"></div>
+</div>
+
+<div class="card">
   <h2>📋 注文一覧</h2>
   <div style="display:flex;gap:8px;margin-bottom:12px">
     <input type="text" id="searchInput" placeholder="注文番号・ICCIDで検索"
@@ -598,6 +638,49 @@ async function resetTest() {
   result.style.display = 'block';
 }
 
+// eSIM在庫一覧
+let esimPage = 0;
+
+async function loadEsims(page) {
+  if (page !== undefined) esimPage = page;
+  const search = document.getElementById('esimSearch').value.trim();
+  const status = document.getElementById('esimStatus').value;
+  const plan = document.getElementById('esimPlan').value;
+  const offset = esimPage * PAGE_SIZE;
+  const list = document.getElementById('esimList');
+  const paging = document.getElementById('esimPaging');
+  list.innerHTML = '読み込み中...';
+  try {
+    let url = BASE + '/admin/esims?key=' + KEY + '&limit=' + PAGE_SIZE + '&offset=' + offset;
+    if (search) url += '&search=' + encodeURIComponent(search);
+    if (status) url += '&status=' + status;
+    if (plan) url += '&plan=' + plan;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.esims.length) { list.innerHTML = '<p style="color:#888;text-align:center">データがありません</p>'; paging.innerHTML=''; return; }
+    const sMap = {unassigned:'🟢未割当', assigned:'🟡割当済', delivered:'🔵配信済'};
+    let html = '<table style="width:100%;border-collapse:collapse">' +
+      '<tr style="background:#f0f0f0"><th style="padding:6px;text-align:left">ICCID</th><th>電話番号</th><th>プラン</th><th>ステータス</th></tr>';
+    d.esims.forEach(e => {
+      html += '<tr style="border-bottom:1px solid #eee">' +
+        '<td style="padding:8px 4px;font-size:11px">' + (e.iccid||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (e.phone_number||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (e.plan_name||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (sMap[e.status]||e.status) + '</td></tr>';
+    });
+    html += '</table>';
+    list.innerHTML = html;
+    const totalPages = Math.ceil(d.total / PAGE_SIZE);
+    let ph = '';
+    if (esimPage > 0) ph += '<button onclick="loadEsims('+(esimPage-1)+')" style="margin:0 4px;padding:4px 12px;cursor:pointer">◀ 前</button>';
+    ph += ' ' + (esimPage+1) + ' / ' + totalPages + ' (' + d.total + '件) ';
+    if (esimPage < totalPages - 1) ph += '<button onclick="loadEsims('+(esimPage+1)+')" style="margin:0 4px;padding:4px 12px;cursor:pointer">次 ▶</button>';
+    paging.innerHTML = ph;
+  } catch(e) { list.innerHTML = '<p style="color:red">読み込み失敗: '+e.message+'</p>'; }
+}
+
+document.getElementById('esimSearch').addEventListener('keydown', (e) => { if(e.key==='Enter') loadEsims(0); });
+
 // 注文一覧
 let orderPage = 0;
 const PAGE_SIZE = 20;
@@ -643,6 +726,7 @@ async function loadOrders(page) {
 document.getElementById('searchInput').addEventListener('keydown', (e) => { if(e.key==='Enter') loadOrders(0); });
 
 loadStats();
+loadEsims(0);
 loadOrders(0);
 </script>
 </body>
