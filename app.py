@@ -631,73 +631,82 @@ def upload_inventory():
 
     try:
         wb = openpyxl.load_workbook(io.BytesIO(f.read()), read_only=True)
-        ws = wb.active
-
-        # 헤더 읽기 + 컬럼 매핑
-        raw_headers = [str(cell.value).strip() if cell.value else "" for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-        mapped_headers = []
-        for h in raw_headers:
-            key = h.lower().replace("+", "+")
-            mapped = COLUMN_MAP.get(key, key)
-            mapped_headers.append(mapped)
-
-        # 필수 컬럼 확인
-        required = {"iccid", "activation_code", "qr_code_data"}
-        found = set(mapped_headers)
-        if not required.issubset(found):
-            missing = required - found
-            return jsonify({
-                "error": f"Missing columns: {', '.join(missing)}",
-                "detected_columns": mapped_headers,
-                "hint": "Expected: ICCID, SM-DP+Address (or sm_dp_address), Activation Code, QR_CODE (or qr_code_data)"
-            }), 400
 
         added = 0
         skipped = 0
         errors = []
+        sheets_processed = []
 
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            data = dict(zip(mapped_headers, row))
-            iccid = str(data.get("iccid", "")).strip()
-            if not iccid:
+        # 모든 시트 순회
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+
+            # 헤더 읽기 + 컬럼 매핑
+            first_row = next(ws.iter_rows(min_row=1, max_row=1), None)
+            if not first_row:
                 continue
 
-            # Plan에서 validity_days 자동 파싱 (기본값: 30일)
-            plan_name = str(data.get("plan_name", "") or "").strip()
-            validity_days = data.get("validity_days")
-            if not validity_days:
-                validity_days = _parse_plan_days(plan_name) or 30
-            else:
-                validity_days = int(validity_days)
+            raw_headers = [str(cell.value).strip() if cell.value else "" for cell in first_row]
+            mapped_headers = []
+            for h in raw_headers:
+                key = h.lower().replace("+", "+")
+                mapped = COLUMN_MAP.get(key, key)
+                mapped_headers.append(mapped)
 
-            # データ量 기본값: 無制限
-            data_amount = str(data.get("data_amount", "") or "").strip() or "無制限"
+            # 필수 컬럼 확인
+            required = {"iccid", "activation_code", "qr_code_data"}
+            found = set(mapped_headers)
+            if not required.issubset(found):
+                errors.append(f"Sheet '{sheet_name}': missing columns {required - found}")
+                continue
 
-            try:
-                ok = db.add_esim(
-                    iccid=iccid,
-                    rental_number=str(data.get("rental_number", "") or "").strip() or None,
-                    phone_number=str(data.get("phone_number", "") or "").strip() or None,
-                    sm_dp_address=str(data.get("sm_dp_address", "") or "").strip(),
-                    activation_code=str(data.get("activation_code", "") or "").strip(),
-                    qr_code_data=str(data.get("qr_code_data", "") or "").strip(),
-                    plan_name=plan_name,
-                    data_amount=data_amount,
-                    validity_days=validity_days,
-                    country=str(data.get("country", "JP") or "JP").strip(),
-                )
-                if ok:
-                    added += 1
+            sheet_added = 0
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                data = dict(zip(mapped_headers, row))
+                iccid = str(data.get("iccid", "")).strip()
+                if not iccid:
+                    continue
+
+                # Plan에서 validity_days 자동 파싱 (기본값: 30일)
+                plan_name = str(data.get("plan_name", "") or "").strip()
+                validity_days = data.get("validity_days")
+                if not validity_days:
+                    validity_days = _parse_plan_days(plan_name) or 30
                 else:
-                    skipped += 1  # 중복 ICCID
-            except Exception as e:
-                errors.append(f"Row {row_idx}: {str(e)}")
+                    validity_days = int(validity_days)
+
+                # データ量 기본값: 無制限
+                data_amount = str(data.get("data_amount", "") or "").strip() or "無制限"
+
+                try:
+                    ok = db.add_esim(
+                        iccid=iccid,
+                        rental_number=str(data.get("rental_number", "") or "").strip() or None,
+                        phone_number=str(data.get("phone_number", "") or "").strip() or None,
+                        sm_dp_address=str(data.get("sm_dp_address", "") or "").strip(),
+                        activation_code=str(data.get("activation_code", "") or "").strip(),
+                        qr_code_data=str(data.get("qr_code_data", "") or "").strip(),
+                        plan_name=plan_name,
+                        data_amount=data_amount,
+                        validity_days=validity_days,
+                        country=str(data.get("country", "JP") or "JP").strip(),
+                    )
+                    if ok:
+                        added += 1
+                        sheet_added += 1
+                    else:
+                        skipped += 1  # 중복 ICCID
+                except Exception as e:
+                    errors.append(f"Sheet '{sheet_name}' Row {row_idx}: {str(e)}")
+
+            sheets_processed.append({"sheet": sheet_name, "added": sheet_added})
 
         wb.close()
         return jsonify({
             "success": True,
             "added": added,
             "skipped_duplicates": skipped,
+            "sheets_processed": sheets_processed,
             "errors": errors,
         })
 
