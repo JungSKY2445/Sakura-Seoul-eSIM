@@ -1,0 +1,8 @@
+.env
+*.db
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+sample_inventory.xlsx
+test_inventory.xlsx

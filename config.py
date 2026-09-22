@@ -23,4 +23,6 @@ PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
 
 # Database (SQLite)
-DB_PATH = os.path.join(os.path.dirname(__file__), "esim_bot.db")
+# Railway Volume이 마운트되어 있으면 /data 사용, 아니면 로컬
+_data_dir = "/data" if os.path.isdir("/data") else os.path.dirname(__file__)
+DB_PATH = os.path.join(_data_dir, "esim_bot.db")
