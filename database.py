@@ -238,6 +238,39 @@ def get_order_by_qr_token(token):
     return dict(row) if row else None
 
 
+def get_all_orders(limit=100, offset=0, status=None, search=None):
+    """주문 목록 조회 (페이징, 필터, 검색)"""
+    conn = get_connection()
+    query = """
+        SELECT om.*, ei.iccid, ei.rental_number, ei.phone_number,
+               ei.sm_dp_address, ei.plan_name, ei.data_amount
+        FROM order_mapping om
+        LEFT JOIN esim_inventory ei ON om.esim_id = ei.id
+    """
+    params = []
+    conditions = []
+    if status:
+        conditions.append("om.status = ?")
+        params.append(status)
+    if search:
+        conditions.append("(om.order_id LIKE ? OR om.amazon_order_id LIKE ? OR ei.iccid LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY om.created_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = conn.execute(query, params).fetchall()
+
+    # 총 건수
+    count_q = "SELECT COUNT(*) FROM order_mapping om LEFT JOIN esim_inventory ei ON om.esim_id = ei.id"
+    if conditions:
+        count_q += " WHERE " + " AND ".join(conditions)
+    total = conn.execute(count_q, params[:-2]).fetchone()[0]
+    conn.close()
+    return [dict(r) for r in rows], total
+
+
 # ========== LINE 세션 관리 ==========
 
 def get_or_create_session(line_user_id):

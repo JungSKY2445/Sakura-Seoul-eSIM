@@ -136,6 +136,18 @@ def admin_stats():
     return jsonify({"status": "ok", "inventory": stats})
 
 
+@app.route("/admin/orders", methods=["GET"])
+@require_admin
+def admin_orders():
+    """주문 목록 조회 API"""
+    limit = int(request.args.get("limit", 20))
+    offset = int(request.args.get("offset", 0))
+    status = request.args.get("status") or None
+    search = request.args.get("search") or None
+    orders, total = db.get_all_orders(limit=limit, offset=offset, status=status, search=search)
+    return jsonify({"orders": orders, "total": total, "limit": limit, "offset": offset})
+
+
 # ========== Event Handlers ==========
 
 @handler.add(FollowEvent)
@@ -437,6 +449,23 @@ input[type="file"] { display: none; }
 </div>
 
 <div class="card">
+  <h2>📋 注文一覧</h2>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <input type="text" id="searchInput" placeholder="注文番号・ICCIDで検索"
+      style="flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+    <select id="statusFilter" style="padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+      <option value="">全て</option>
+      <option value="pending">⏳ 準備中</option>
+      <option value="matched">✅ マッチ済</option>
+      <option value="delivered">📦 配信済</option>
+    </select>
+    <button onclick="loadOrders()" style="padding:8px 16px;background:#2196F3;color:#fff;border:none;border-radius:6px;cursor:pointer">検索</button>
+  </div>
+  <div id="orderList" style="font-size:13px">読み込み中...</div>
+  <div id="orderPaging" style="text-align:center;margin-top:12px"></div>
+</div>
+
+<div class="card">
   <h2>🗑️ テストデータリセット</h2>
   <p style="font-size:13px;color:#888;margin-bottom:12px">全注文を削除し、eSIM在庫を未割当に戻します</p>
   <button class="btn btn-danger" onclick="resetTest()">リセット実行</button>
@@ -569,7 +598,52 @@ async function resetTest() {
   result.style.display = 'block';
 }
 
+// 注文一覧
+let orderPage = 0;
+const PAGE_SIZE = 20;
+
+async function loadOrders(page) {
+  if (page !== undefined) orderPage = page;
+  const search = document.getElementById('searchInput').value.trim();
+  const status = document.getElementById('statusFilter').value;
+  const offset = orderPage * PAGE_SIZE;
+  const list = document.getElementById('orderList');
+  const paging = document.getElementById('orderPaging');
+  list.innerHTML = '読み込み中...';
+  try {
+    let url = BASE + '/admin/orders?key=' + KEY + '&limit=' + PAGE_SIZE + '&offset=' + offset;
+    if (search) url += '&search=' + encodeURIComponent(search);
+    if (status) url += '&status=' + status;
+    const r = await fetch(url);
+    const d = await r.json();
+    if (!d.orders.length) { list.innerHTML = '<p style="color:#888;text-align:center">注文がありません</p>'; paging.innerHTML=''; return; }
+    const statusMap = {pending:'⏳準備中', matched:'✅マッチ済', delivered:'📦配信済'};
+    let html = '<table style="width:100%;border-collapse:collapse">' +
+      '<tr style="background:#f0f0f0"><th style="p:6px;text-align:left">注文番号</th><th>ICCID</th><th>プラン</th><th>ステータス</th><th>日時</th></tr>';
+    d.orders.forEach(o => {
+      html += '<tr style="border-bottom:1px solid #eee">' +
+        '<td style="padding:8px 4px;font-size:12px">' + (o.order_id||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (o.iccid||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (o.plan_name||'-') + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (statusMap[o.status]||o.status) + '</td>' +
+        '<td style="padding:8px 4px;font-size:12px">' + (o.created_at||'').slice(0,16) + '</td></tr>';
+    });
+    html += '</table>';
+    list.innerHTML = html;
+    // paging
+    const totalPages = Math.ceil(d.total / PAGE_SIZE);
+    let ph = '';
+    if (orderPage > 0) ph += '<button onclick="loadOrders('+(orderPage-1)+')" style="margin:0 4px;padding:4px 12px;cursor:pointer">◀ 前</button>';
+    ph += ' ' + (orderPage+1) + ' / ' + totalPages + ' ';
+    if (orderPage < totalPages - 1) ph += '<button onclick="loadOrders('+(orderPage+1)+')" style="margin:0 4px;padding:4px 12px;cursor:pointer">次 ▶</button>';
+    paging.innerHTML = ph;
+  } catch(e) { list.innerHTML = '<p style="color:red">読み込み失敗: '+e.message+'</p>'; }
+}
+
+document.getElementById('searchInput').addEventListener('keydown', (e) => { if(e.key==='Enter') loadOrders(0); });
+
 loadStats();
+loadOrders(0);
 </script>
 </body>
 </html>"""
