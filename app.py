@@ -621,6 +621,9 @@ async function createTestOrder() {
 
 // リセット
 async function resetTest() {
+  const pw = prompt('パスワードを入力してください:');
+  if (!pw) return;
+  if (pw !== '4283') { alert('パスワードが違います'); return; }
   if (!confirm('本当にリセットしますか？全注文が削除されます。')) return;
   const result = document.getElementById('resetResult');
   try {
