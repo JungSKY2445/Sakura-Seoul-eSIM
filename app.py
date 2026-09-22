@@ -276,8 +276,7 @@ def _deliver_esim_qr(event, user_id, order):
     delivery_text = msg.ESIM_DELIVERED.format(
         order_id=order.get("amazon_order_id") or order["order_id"],
         plan_name=order.get("plan_name", "—"),
-        data_amount=order.get("data_amount", "—"),
-        validity_days=order.get("validity_days", "—"),
+        data_amount=order.get("data_amount", "無制限"),
         phone_number=order.get("phone_number", "—"),
         rental_number=order.get("rental_number", "—"),
         sm_dp_address=order.get("sm_dp_address", "—"),
@@ -709,13 +708,16 @@ def upload_inventory():
             if not iccid:
                 continue
 
-            # Plan에서 validity_days 자동 파싱
+            # Plan에서 validity_days 자동 파싱 (기본값: 30일)
             plan_name = str(data.get("plan_name", "") or "").strip()
             validity_days = data.get("validity_days")
             if not validity_days:
-                validity_days = _parse_plan_days(plan_name)
+                validity_days = _parse_plan_days(plan_name) or 30
             else:
                 validity_days = int(validity_days)
+
+            # データ量 기본값: 無制限
+            data_amount = str(data.get("data_amount", "") or "").strip() or "無制限"
 
             try:
                 ok = db.add_esim(
@@ -726,7 +728,7 @@ def upload_inventory():
                     activation_code=str(data.get("activation_code", "") or "").strip(),
                     qr_code_data=str(data.get("qr_code_data", "") or "").strip(),
                     plan_name=plan_name,
-                    data_amount=str(data.get("data_amount", "") or "").strip(),
+                    data_amount=data_amount,
                     validity_days=validity_days,
                     country=str(data.get("country", "JP") or "JP").strip(),
                 )
