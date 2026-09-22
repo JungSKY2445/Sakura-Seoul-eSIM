@@ -177,12 +177,7 @@ def handle_text_message(event):
 
     # ── QR코드 발행 플로우: 주문번호 입력 대기 중 ──
     if current_step == "awaiting_order_number_qr":
-        handle_qr_order_number(event, user_id, text)
-        return
-
-    # ── QR코드 발행 플로우: 이메일 인증 대기 중 ──
-    if current_step == "awaiting_email_verify":
-        handle_qr_email_verify(event, user_id, text)
+        handle_qr_issue(event, user_id, text)
         return
 
     # ── 기본 메시지 (그 외) ──
@@ -197,10 +192,8 @@ def handle_text_message(event):
 
 # ========== Business Logic ==========
 
-def handle_qr_order_number(event, user_id, text):
-    """QR코드 발행 Step 1: 주문번호 확인"""
-    import json
-
+def handle_qr_issue(event, user_id, text):
+    """QR코드 발행 처리"""
     # 주문번호 형식 검증
     if not AMAZON_ORDER_PATTERN.match(text):
         reply(event, msg.ORDER_NOT_FOUND)
@@ -228,46 +221,7 @@ def handle_qr_order_number(event, user_id, text):
         db.update_session(user_id, "idle")
         return
 
-    # 주문번호를 세션에 저장하고 이메일 인증 단계로
-    temp = json.dumps({"order_id": order["order_id"]})
-    db.update_session(user_id, "awaiting_email_verify", temp_data=temp)
-    reply(event, msg.ASK_VERIFY_EMAIL)
-
-
-def handle_qr_email_verify(event, user_id, text):
-    """QR코드 발행 Step 2: 이메일 인증 후 QR 전달"""
-    import json
-
-    # 세션에서 주문 ID 가져오기
-    session = db.get_or_create_session(user_id)
-    try:
-        temp = json.loads(session.get("temp_data") or "{}")
-        order_id = temp.get("order_id")
-    except (json.JSONDecodeError, AttributeError):
-        order_id = None
-
-    if not order_id:
-        reply(event, "⚠️ セッションが切れました。もう一度「QRコード発行」からやり直してください。")
-        db.update_session(user_id, "idle")
-        return
-
-    # 주문 재조회
-    order = db.get_order_by_id(order_id)
-    if not order:
-        reply(event, msg.ORDER_NOT_FOUND)
-        db.update_session(user_id, "idle")
-        return
-
-    # 이메일 비교 (대소문자 무시, 전후 공백 제거)
-    input_email = text.strip().lower()
-    stored_email = (order.get("buyer_email") or "").strip().lower()
-
-    if not stored_email or input_email != stored_email:
-        reply(event, msg.EMAIL_MISMATCH)
-        # 재입력 가능하도록 세션 유지 (idle로 돌아가지 않음)
-        return
-
-    # 인증 성공 → QR코드 전달
+    # QR코드 전달
     _deliver_esim_qr(event, user_id, order)
 
 
