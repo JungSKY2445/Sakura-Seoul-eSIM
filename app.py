@@ -115,14 +115,12 @@ def serve_qr_image(token):
     if not order or not order.get("qr_code_data"):
         abort(404)
 
-    # QR코드 이미지 생성 (api.qrserver.com 200x200 스타일과 동일)
-    qr = qrcode.QRCode(version=None, box_size=5, border=2,
+    # QR코드 이미지 로컬 생성
+    qr = qrcode.QRCode(version=None, box_size=10, border=4,
                         error_correction=qrcode.constants.ERROR_CORRECT_L)
     qr.add_data(order["qr_code_data"])
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    # 200x200으로 리사이즈
-    img = img.resize((200, 200), Image.NEAREST)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
