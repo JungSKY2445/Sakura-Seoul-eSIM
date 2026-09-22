@@ -44,8 +44,8 @@ def fetch_recent_orders(hours_back=24):
     try:
         orders_api = Orders(credentials=creds, marketplace=MARKETPLACE)
 
-        # 조회 시작 시간
-        after = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).isoformat()
+        # 조회 시작 시간 (ISO8601 Z형식)
+        after = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
         response = orders_api.get_orders(
             CreatedAfter=after,
