@@ -962,6 +962,40 @@ def setup_rich_menu():
     return jsonify(results)
 
 
+# ========== 주문 자동 동기화 (백그라운드) ==========
+
+import threading
+
+_sync_running = False
+
+
+def _auto_sync_loop(interval=300):
+    """5분(300초)마다 Amazon 주문 자동 동기화"""
+    global _sync_running
+    if _sync_running:
+        return
+    _sync_running = True
+    logger.info(f"Auto-sync started (interval: {interval}s)")
+
+    def run():
+        while True:
+            try:
+                result = amazon_api.sync_orders(hours_back=1)
+                if result["new"] > 0 or result["errors"] > 0:
+                    logger.info(f"Auto-sync result: {result}")
+            except Exception as e:
+                logger.error(f"Auto-sync error: {e}")
+            import time as _time
+            _time.sleep(interval)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+
+
+# gunicorn 환경에서도 자동 시작
+_auto_sync_loop()
+
+
 # ========== Startup ==========
 
 if __name__ == "__main__":
