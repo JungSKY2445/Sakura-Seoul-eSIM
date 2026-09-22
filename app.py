@@ -165,9 +165,9 @@ def handle_text_message(event):
         reply(event, msg.HOW_TO_USE_GUIDE)
         return
 
-    if text == msg.ACTION_CHECK_ORDER:
-        db.update_session(user_id, "awaiting_order_number_check")
-        reply(event, msg.ASK_ORDER_NUMBER_CHECK)
+    if text == msg.ACTION_KOREA_GUIDE:
+        db.update_session(user_id, "idle")
+        reply(event, msg.KOREA_ESIM_VOICE_GUIDE)
         return
 
     if text == msg.ACTION_CONTACT:
@@ -177,12 +177,12 @@ def handle_text_message(event):
 
     # ── QR코드 발행 플로우: 주문번호 입력 대기 중 ──
     if current_step == "awaiting_order_number_qr":
-        handle_qr_issue(event, user_id, text)
+        handle_qr_order_number(event, user_id, text)
         return
 
-    # ── 주문 확인 플로우: 주문번호 입력 대기 중 ──
-    if current_step == "awaiting_order_number_check":
-        handle_order_check(event, user_id, text)
+    # ── QR코드 발행 플로우: 이메일 인증 대기 중 ──
+    if current_step == "awaiting_email_verify":
+        handle_qr_email_verify(event, user_id, text)
         return
 
     # ── 기본 메시지 (그 외) ──
@@ -197,8 +197,10 @@ def handle_text_message(event):
 
 # ========== Business Logic ==========
 
-def handle_qr_issue(event, user_id, text):
-    """QR코드 발행 처리"""
+def handle_qr_order_number(event, user_id, text):
+    """QR코드 발행 Step 1: 주문번호 확인"""
+    import json
+
     # 주문번호 형식 검증
     if not AMAZON_ORDER_PATTERN.match(text):
         reply(event, msg.ORDER_NOT_FOUND)
@@ -207,7 +209,6 @@ def handle_qr_issue(event, user_id, text):
     # 주문 조회
     order = db.get_order_by_amazon_id(text)
     if not order:
-        # order_id로도 시도
         order = db.get_order_by_id(text)
 
     if not order:
@@ -227,7 +228,51 @@ def handle_qr_issue(event, user_id, text):
         db.update_session(user_id, "idle")
         return
 
-    # QR코드와 함께 eSIM 정보 전달
+    # 주문번호를 세션에 저장하고 이메일 인증 단계로
+    temp = json.dumps({"order_id": order["order_id"]})
+    db.update_session(user_id, "awaiting_email_verify", temp_data=temp)
+    reply(event, msg.ASK_VERIFY_EMAIL)
+
+
+def handle_qr_email_verify(event, user_id, text):
+    """QR코드 발행 Step 2: 이메일 인증 후 QR 전달"""
+    import json
+
+    # 세션에서 주문 ID 가져오기
+    session = db.get_or_create_session(user_id)
+    try:
+        temp = json.loads(session.get("temp_data") or "{}")
+        order_id = temp.get("order_id")
+    except (json.JSONDecodeError, AttributeError):
+        order_id = None
+
+    if not order_id:
+        reply(event, "⚠️ セッションが切れました。もう一度「QRコード発行」からやり直してください。")
+        db.update_session(user_id, "idle")
+        return
+
+    # 주문 재조회
+    order = db.get_order_by_id(order_id)
+    if not order:
+        reply(event, msg.ORDER_NOT_FOUND)
+        db.update_session(user_id, "idle")
+        return
+
+    # 이메일 비교 (대소문자 무시, 전후 공백 제거)
+    input_email = text.strip().lower()
+    stored_email = (order.get("buyer_email") or "").strip().lower()
+
+    if not stored_email or input_email != stored_email:
+        reply(event, msg.EMAIL_MISMATCH)
+        # 재입력 가능하도록 세션 유지 (idle로 돌아가지 않음)
+        return
+
+    # 인증 성공 → QR코드 전달
+    _deliver_esim_qr(event, user_id, order)
+
+
+def _deliver_esim_qr(event, user_id, order):
+    """인증 완료 후 QR코드 + eSIM 정보 전달"""
     delivery_text = msg.ESIM_DELIVERED.format(
         order_id=order.get("amazon_order_id") or order["order_id"],
         plan_name=order.get("plan_name", "—"),
@@ -245,7 +290,6 @@ def handle_qr_issue(event, user_id, text):
     qr_code_data = order.get("qr_code_data")
     if qr_code_data:
         if qr_code_data.startswith("http"):
-            # 외부 URL 이미지
             messages.append(
                 ImageMessage(
                     original_content_url=qr_code_data,
@@ -255,7 +299,6 @@ def handle_qr_issue(event, user_id, text):
         else:
             # LPA 데이터 → 서버에서 QR 이미지 생성
             token = db.generate_qr_token(order["order_id"])
-            # Railway 등 프록시 환경에서 HTTPS 강제
             base_url = request.url_root.rstrip("/")
             if base_url.startswith("http://"):
                 base_url = "https://" + base_url[7:]
@@ -276,40 +319,12 @@ def handle_qr_issue(event, user_id, text):
         db.mark_esim_delivered(order["order_id"])
     except Exception as e:
         logger.error(f"Reply failed, sending text only: {e}")
-        # 이미지 실패 시 텍스트만 재시도
         try:
             reply(event, delivery_text)
             db.mark_esim_delivered(order["order_id"])
         except Exception as e2:
             logger.error(f"Text reply also failed: {e2}")
 
-    db.update_session(user_id, "idle")
-
-
-def handle_order_check(event, user_id, text):
-    """주문 확인 처리"""
-    if not AMAZON_ORDER_PATTERN.match(text):
-        reply(event, msg.ORDER_NOT_FOUND)
-        return
-
-    order = db.get_order_by_amazon_id(text)
-    if not order:
-        order = db.get_order_by_id(text)
-
-    if not order:
-        reply(event, msg.ORDER_NOT_FOUND)
-        db.update_session(user_id, "idle")
-        return
-
-    status_text = msg.STATUS_MAP.get(order["status"], order["status"])
-    info_text = msg.ORDER_STATUS_INFO.format(
-        order_id=order.get("amazon_order_id") or order["order_id"],
-        status_text=status_text,
-        plan_name=order.get("plan_name", "—"),
-        data_amount=order.get("data_amount", "—"),
-    )
-
-    reply(event, info_text)
     db.update_session(user_id, "idle")
 
 
@@ -769,7 +784,7 @@ def _build_main_image(fonts):
     buttons = [
         {"label": "QRコード発行", "bg": "#2196F3", "desc": "eSIMを受け取る", "icon": "QR"},
         {"label": "使い方ガイド", "bg": "#4CAF50", "desc": "設定方法を確認", "icon": "?"},
-        {"label": "注文確認",     "bg": "#FF9800", "desc": "注文状況をチェック", "icon": "!!"},
+        {"label": "音声・SMS案内", "bg": "#FF9800", "desc": "音声通話の利用方法", "icon": "📞"},
         {"label": "チャット入力", "bg": "#607D8B", "desc": "キーボードで入力", "icon": "Aa"},
     ]
     img = Image.new("RGB", (W, H), "#FFFFFF")
@@ -871,8 +886,8 @@ def setup_rich_menu():
              "action": {"type": "message", "label": "使い方ガイド",
                         "text": "使い方ガイド"}},
             {"bounds": {"x": 0,  "y": CH, "width": CW, "height": CH},
-             "action": {"type": "message", "label": "注文確認",
-                        "text": "注文確認"}},
+             "action": {"type": "message", "label": "音声・SMS案内",
+                        "text": "音声・SMS案内"}},
             {"bounds": {"x": CW, "y": CH, "width": CW, "height": CH},
              "action": {"type": "richmenuswitch",
                         "richMenuAliasId": "richmenu-keyboard",
