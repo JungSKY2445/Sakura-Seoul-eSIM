@@ -682,6 +682,20 @@ async function loadEsims(page) {
 
 document.getElementById('esimSearch').addEventListener('keydown', (e) => { if(e.key==='Enter') loadEsims(0); });
 
+// UTC→JST変換
+function toJST(utcStr) {
+  if (!utcStr) return '-';
+  const d = new Date(utcStr + (utcStr.includes('Z') || utcStr.includes('+') ? '' : 'Z'));
+  if (isNaN(d)) return utcStr.slice(0,16);
+  const jst = new Date(d.getTime() + 9*60*60*1000);
+  const Y = jst.getUTCFullYear();
+  const M = String(jst.getUTCMonth()+1).padStart(2,'0');
+  const D = String(jst.getUTCDate()).padStart(2,'0');
+  const h = String(jst.getUTCHours()).padStart(2,'0');
+  const m = String(jst.getUTCMinutes()).padStart(2,'0');
+  return Y+'-'+M+'-'+D+' '+h+':'+m;
+}
+
 // 注文一覧
 let orderPage = 0;
 const PAGE_SIZE = 20;
@@ -710,7 +724,7 @@ async function loadOrders(page) {
         '<td style="padding:8px 4px;font-size:12px">' + (o.iccid||'-') + '</td>' +
         '<td style="padding:8px 4px;font-size:12px">' + (o.plan_name||'-') + '</td>' +
         '<td style="padding:8px 4px;font-size:12px">' + (statusMap[o.status]||o.status) + '</td>' +
-        '<td style="padding:8px 4px;font-size:12px">' + (o.created_at||'').slice(0,16) + '</td></tr>';
+        '<td style="padding:8px 4px;font-size:12px">' + toJST(o.created_at) + '</td></tr>';
     });
     html += '</table>';
     list.innerHTML = html;
